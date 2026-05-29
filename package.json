@@ -1,0 +1,24 @@
+{
+  "name": "generator-engine",
+  "version": "1.0.0",
+  "description": "Node.js orchestrator that fetches text from LLMs, transforms it into image prompts, commands the local ComfyUI server, and saves the final assets",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "start:queue": "node dist/index.js --process-queue",
+    "dev": "node --loader ts-node/esm src/index.ts",
+    "dev:queue": "node --loader ts-node/esm src/index.ts --process-queue"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "dotenv": "^16.4.5",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  }
+}
