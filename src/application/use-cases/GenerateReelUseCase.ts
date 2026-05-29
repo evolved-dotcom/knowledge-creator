@@ -4,7 +4,7 @@ import { ReelConcept } from '../../domain/models/ReelConcept.js';
 
 export interface GenerateReelUseCaseResponse {
   concept: ReelConcept;
-  localImagePath: string;
+  localImagePaths: string[];
 }
 
 export class GenerateReelUseCase {
@@ -18,19 +18,42 @@ export class GenerateReelUseCase {
     const concept = await this.llmService.generateReelConcept(topic);
     
     console.log(`[GenerateReelUseCase] ✅ Concept successfully generated!`);
-    console.log(`   🔸 Title: ${concept.topic}`);
-    console.log(`   🔸 Image Prompt to be sent: "${concept.imagePrompt}"`);
-    console.log(`   🔸 Content: ${concept.contentText}`);
+    console.log(`   🔸 Format: ${concept.format}`);
+    console.log(`   🔸 Category: ${concept.category}`);
+    console.log(`   🔸 Tags: [${concept.tags.join(', ')}]`);
+    console.log(`   🔸 Sync Status: ${concept.syncStatus}`);
+    const localImagePaths: string[] = [];
+    console.log(`\n[GenerateReelUseCase] 2️⃣ Sending image prompt(s) to ComfyUI Render Service...`);
 
-    console.log(`\n[GenerateReelUseCase] 2️⃣ Sending image prompt to ComfyUI Render Service...`);
-    const localImagePath = await this.renderService.renderImage(concept.imagePrompt);
-    
-    console.log(`[GenerateReelUseCase] ✅ Render completed successfully!`);
-    console.log(`   🔸 Image saved locally at: ${localImagePath}`);
+    if (concept.format === 'deep_dive') {
+      console.log(`   🔸 Deep Dive Explanation: ${concept.deepExplanation}`);
+      console.log(`   🔸 Image Prompt to be sent: "${concept.mainImagePrompt}"`);
+      const path = await this.renderService.renderImage(concept.mainImagePrompt);
+      localImagePaths.push(path);
+      console.log(`   🔸 Image saved locally at: ${path}`);
+    } else if (concept.format === 'trinity') {
+      console.log(`   🔸 Trinity Slides generation started`);
+      for (let i = 0; i < concept.slides.length; i++) {
+        const slide = concept.slides[i];
+        console.log(`   🔸 Slide ${i + 1} Text: ${slide.text}`);
+        console.log(`   🔸 Slide ${i + 1} Image Prompt: "${slide.imagePrompt}"`);
+        const path = await this.renderService.renderImage(slide.imagePrompt);
+        localImagePaths.push(path);
+        console.log(`   🔸 Slide ${i + 1} Image saved locally at: ${path}`);
+        
+        // Mandatory 10s cooldown between GPU renders
+        if (i < concept.slides.length - 1) {
+          console.log(`[GenerateReelUseCase] ⏳ Mandatory 10-second GPU cooldown between slides...`);
+          await new Promise(resolve => setTimeout(resolve, 10000));
+        }
+      }
+    }
+
+    console.log(`[GenerateReelUseCase] ✅ Render process completed successfully!`);
 
     return {
       concept,
-      localImagePath
+      localImagePaths
     };
   }
 }

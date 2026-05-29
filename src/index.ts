@@ -5,6 +5,7 @@ import { GeminiLLMAdapter } from './infrastructure/adapters/GeminiLLMAdapter.js'
 import { ComfyUIRenderAdapter } from './infrastructure/adapters/ComfyUIRenderAdapter.js';
 import { GenerateReelUseCase } from './application/use-cases/GenerateReelUseCase.js';
 import { LocalQueueRepository } from './infrastructure/repositories/LocalQueueRepository.js';
+import { SemanticSimilarityService } from './infrastructure/services/SemanticSimilarityService.js';
 
 (async () => {
   try {
@@ -21,6 +22,7 @@ import { LocalQueueRepository } from './infrastructure/repositories/LocalQueueRe
     const llmAdapter = new GeminiLLMAdapter(geminiApiKey);
     const renderAdapter = new ComfyUIRenderAdapter(comfyUiUrl);
     const queueRepository = new LocalQueueRepository();
+    const semanticSimilarityService = new SemanticSimilarityService();
 
     // 2. Instantiate Use Case
     const generateReelUseCase = new GenerateReelUseCase(llmAdapter, renderAdapter);
@@ -44,20 +46,29 @@ import { LocalQueueRepository } from './infrastructure/repositories/LocalQueueRe
         console.log(`\n[QUEUE] Processing topic: "${nextTopic}" (${remaining} item(s) in queue)`);
 
         try {
+          const isDuplicate = await semanticSimilarityService.isSemanticDuplicate(nextTopic);
+          if (isDuplicate) {
+            console.log(`[QUEUE] 🛑 Semantic duplicate detected for: "${nextTopic}". Aborting generation.`);
+            continue;
+          }
+
           const result = await generateReelUseCase.execute(nextTopic);
           
           console.log(`[QUEUE] ✅ Generation Complete for: "${nextTopic}"`);
-          console.log(`[QUEUE] Local Image Path: ${result.localImagePath}`);
+          console.log(`[QUEUE] Local Image Paths: ${result.localImagePaths.join(', ')}`);
           
-          // Once successfully saved, calls removeFirstTopic() to purge it from the queue
-          await queueRepository.removeFirstTopic();
+          await semanticSimilarityService.registerTopic(nextTopic);
         } catch (taskError) {
           console.error(`\n[QUEUE] ❌ Error processing topic: "${nextTopic}"`);
           console.error(taskError);
           console.log("[QUEUE] Skipping topic and allowing the next topic to be evaluated.");
-          
-          // Remove the failed topic to prevent an infinite failure loop on the same element
+        } finally {
+          // Remove the processed or failed topic to prevent an infinite loop
           await queueRepository.removeFirstTopic();
+          
+          // Mandatory 10-second cooldown for RTX 4060 Ti VRAM garbage collection
+          console.log("[QUEUE] ⏳ Cooling down for 10 seconds to free up VRAM...");
+          await new Promise(resolve => setTimeout(resolve, 10000));
         }
       }
     } else {
@@ -71,7 +82,7 @@ import { LocalQueueRepository } from './infrastructure/repositories/LocalQueueRe
       console.log("=== Reel Concept ===");
       console.log(JSON.stringify(result.concept, null, 2));
       console.log("====================");
-      console.log(`Local Image Path: ${result.localImagePath}`);
+      console.log(`Local Image Paths: ${result.localImagePaths.join(', ')}`);
     }
 
   } catch (error) {

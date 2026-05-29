@@ -11,12 +11,29 @@ export class LLMValidationError extends Error {
   }
 }
 
-const reelConceptSchema = z.object({
-  topic: z.string(),
-  contentText: z.string(),
-  explanation: z.string(),
-  imagePrompt: z.string(),
-});
+const categorySchema = z.enum(["History", "Science", "Technology", "Psychology", "Culture", "Philosophy", "Art", "Economics", "Geography", "Mythology", "Biographies"]);
+
+const reelConceptSchema = z.discriminatedUnion('format', [
+  z.object({
+    format: z.literal('deep_dive'),
+    topic: z.string(),
+    category: categorySchema,
+    tags: z.array(z.string()).max(3),
+    deepExplanation: z.string(),
+    mainImagePrompt: z.string(),
+  }),
+  z.object({
+    format: z.literal('trinity'),
+    topic: z.string(),
+    category: categorySchema,
+    tags: z.array(z.string()).max(3),
+    slides: z.tuple([
+      z.object({ text: z.string(), imagePrompt: z.string() }),
+      z.object({ text: z.string(), imagePrompt: z.string() }),
+      z.object({ text: z.string(), imagePrompt: z.string() })
+    ])
+  })
+]);
 
 export class GeminiLLMAdapter implements ILLMService {
   private genAI: GoogleGenerativeAI;
@@ -28,7 +45,7 @@ export class GeminiLLMAdapter implements ILLMService {
     }
     this.genAI = new GoogleGenerativeAI(apiKey);
     this.model = this.genAI.getGenerativeModel({
-      model: "gemini-3.5-flash",
+      model: "gemini-3.1-flash-lite",
       generationConfig: {
         responseMimeType: "application/json",
       }
@@ -40,30 +57,71 @@ export class GeminiLLMAdapter implements ILLMService {
   Eres un erudito experto en divulgación cultural, historia, filosofía, ciencia y folklore, con una habilidad magistral para retener la atención del usuario (estilo TikTok/Reels).
   Tu objetivo es generar contenido fascinante y de alto valor educativo basado en el tema proporcionado: "${topic}".
   
-  REGLAS DE ESCRITURA (El Efecto "Wow"):
-  - "contentText": Debe ser un gancho narrativo brutal. Una verdad impactante, un refrán, o un dato histórico que rompa esquemas. Redacción impecable, directa al cerebro del lector. (Aprox. 2-4 frases).
-  - "explanation": La disección profunda. Si es un refrán, explica su origen histórico real. Si es ciencia, explica el mecanismo oculto. Si es historia, el contexto olvidado. El usuario debe sentir que acaba de aprender algo invaluable que necesita compartir.
+  FORMATOS PERMITIDOS (Elige uno dinámicamente según el tema):
+  1) "deep_dive": Para conceptos singulares que requieren una explicación profunda y detallada.
+  2) "trinity": Para procesos narrativos que se benefician de una estructura de 3 actos (Inicio, Nudo, Desenlace).
+  
+  TAXONOMÍA ESTRICTA (OBLIGATORIO):
+  Debes clasificar el tema obligatoriamente en UNA de estas categorías exactas: "History", "Science", "Technology", "Psychology", "Culture", "Philosophy", "Art", "Economics", "Geography", "Mythology", "Biographies".
+  Debes generar exactamente entre 1 y 3 etiquetas (tags) SEO-friendly relacionadas con el tema.
 
   REGLAS DE INGENIERÍA VISUAL (imagePrompt):
   - El prompt visual DEBE ESTAR ESTRICTAMENTE EN INGLÉS (optimizado para el modelo FLUX).
-  - DEBES adaptar dinámicamente el estilo artístico a la categoría del tema:
-    * Si es nihilismo/filosofía oscura: Inicia con "Zdzisław Beksiński style, dark surrealism, macabre, highly textured".
-    * Si es historia (ej. Imperio Romano, Catalina la Grande): Inicia con "Cinematic historical photography, highly detailed, dramatic lighting, period-accurate attire, epic composition".
-    * Si es ciencia/anatomía: Inicia con "Hyper-realistic macro photography, 3d render, Unreal Engine 5, scientific visualization, intricate details".
-    * Si es un refrán/folklore: Inicia con "Classic masterpiece oil painting, atmospheric, expressive, folkloric aesthetic".
-  - OBLIGATORIO EN TODOS LOS PROMPTS (Para la UI de la app): Debes incluir siempre al final de la descripción esta directiva: "Deep, pure black shadows at the extreme top and extreme bottom of the composition to allow white text overlay, no text in the image".
+  - OBLIGATORIO EN TODOS LOS PROMPTS: Añade al final de la descripción "Deep, pure black shadows at the extreme top and extreme bottom of the composition to allow white text overlay, no text in the image".
   
-  Devuelve ÚNICAMENTE un objeto JSON estricto con esta estructura exacta, sin bloques markdown (\`\`\`json) ni texto adicional:
+  Si eliges "deep_dive", devuelve ÚNICAMENTE este JSON:
   {
-    "topic": "El tema solicitado",
-    "contentText": "El gancho narrativo impactante en español",
-    "explanation": "La explicación profunda y educativa en español",
-    "imagePrompt": "El prompt visual dinámico en inglés aplicando el estilo correcto"
+    "format": "deep_dive",
+    "topic": "${topic}",
+    "category": "Categoría Exacta",
+    "tags": ["tag1", "tag2", "tag3"],
+    "deepExplanation": "Explicación magistral y extensa en español",
+    "mainImagePrompt": "Prompt visual en inglés"
+  }
+  
+  Si eliges "trinity", devuelve ÚNICAMENTE este JSON con EXACTAMENTE 3 slides:
+  {
+    "format": "trinity",
+    "topic": "${topic}",
+    "category": "Categoría Exacta",
+    "tags": ["tag1", "tag2", "tag3"],
+    "slides": [
+      { "text": "Texto del Acto 1", "imagePrompt": "Prompt 1 en inglés" },
+      { "text": "Texto del Acto 2", "imagePrompt": "Prompt 2 en inglés" },
+      { "text": "Texto del Acto 3", "imagePrompt": "Prompt 3 en inglés" }
+    ]
   }
 `;
 
     try {
-      const result = await this.model.generateContent(prompt);
+      const maxRetries = 3;
+      let attempt = 0;
+      let delayMs = 4000;
+      let result;
+
+      while (attempt <= maxRetries) {
+        try {
+          result = await this.model.generateContent(prompt);
+          break; // Success, exit retry loop
+        } catch (error: any) {
+          if (error.status === 429 || (error.message && error.message.includes('429'))) {
+            if (attempt >= maxRetries) {
+              throw new Error(`Failed to generate content after ${maxRetries} retries due to 429 Too Many Requests: ${error.message}`);
+            }
+            console.warn(`[GeminiLLMAdapter] ⚠️ Rate limit hit (429). Retrying in ${delayMs / 1000}s... (Attempt ${attempt + 1}/${maxRetries})`);
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+            delayMs *= 2; // Exponential backoff: 4s, 8s, 16s...
+            attempt++;
+          } else {
+            throw error;
+          }
+        }
+      }
+
+      if (!result) {
+        throw new Error("Failed to generate content: result is undefined");
+      }
+
       const responseText = result.response.text();
 
       let parsedJson: unknown;
@@ -81,14 +139,31 @@ export class GeminiLLMAdapter implements ILLMService {
 
       const validData = validationResult.data;
 
-      const concept: ReelConcept = {
-        id: randomUUID(),
-        topic: validData.topic,
-        contentText: validData.contentText,
-        explanation: validData.explanation,
-        imagePrompt: validData.imagePrompt,
-        createdAt: new Date(),
-      };
+      let concept: ReelConcept;
+      if (validData.format === 'deep_dive') {
+        concept = {
+          id: randomUUID(),
+          format: 'deep_dive',
+          topic: validData.topic,
+          category: validData.category,
+          tags: validData.tags,
+          syncStatus: 'generated',
+          deepExplanation: validData.deepExplanation,
+          mainImagePrompt: validData.mainImagePrompt,
+          createdAt: new Date(),
+        };
+      } else {
+        concept = {
+          id: randomUUID(),
+          format: 'trinity',
+          topic: validData.topic,
+          category: validData.category,
+          tags: validData.tags,
+          syncStatus: 'generated',
+          slides: validData.slides,
+          createdAt: new Date(),
+        };
+      }
 
       return concept;
 

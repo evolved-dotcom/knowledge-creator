@@ -25,8 +25,10 @@ export class LocalQueueRepository {
   }
 
   private async writeQueue(queue: string[]): Promise<void> {
+    const tmpPath = `${this.filePath}.tmp`;
     try {
-      await fs.writeFile(this.filePath, JSON.stringify(queue, null, 2), 'utf-8');
+      await fs.writeFile(tmpPath, JSON.stringify(queue, null, 2), 'utf-8');
+      await fs.rename(tmpPath, this.filePath);
     } catch (error) {
       throw new QueueRepositoryError('Failed to write topics queue to file', error);
     }

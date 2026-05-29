@@ -5,3 +5,4 @@ output/
 *.zip
 *.log
 src/infrastructure/data/topics_queue.json
+src/infrastructure/data/processed_topics_vectors.json
